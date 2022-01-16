@@ -1,0 +1,19 @@
+[package]
+name = "sonicbot-matrix"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ctrlc = "3.2.1"
+ctrlc-handler = { git = "https://github.com/sonicrules1234/ctrlc-handler" }
+ruma = { version = "0.4.0", features = ["events", "client-api-c", "api"] }
+serde = { version = "1.0.133", features = ["derive"] }
+serde_json = "1.0.74"
+serde_yaml = "0.8.23"
+ureq = { version = "2.4.0", features = ["json"] }
+urlencoding = "2.1.0"
+uuid = { version = "0.8.2", features = ["v4"] }
+
+[features]

@@ -1,0 +1,7 @@
+username: "examplebot" 
+server_name: "matrix.org"
+host: "https://matrix.org"
+password: "passwordhere"
+initial_rooms:
+  - "#example:matrix.org"
+  - "#example2:matrix.org"
