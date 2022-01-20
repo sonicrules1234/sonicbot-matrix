@@ -5,3 +5,5 @@ password: "passwordhere"
 initial_rooms:
   - "#example:matrix.org"
   - "#example2:matrix.org"
+prefix: "!"
+owner: "@exampleowner@matrix.org"

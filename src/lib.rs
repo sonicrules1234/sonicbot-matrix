@@ -1,115 +1,177 @@
-//use sonic_serde_object::SonicSerdeObject;
-use ruma::RoomId;
-use ruma::UserId;
-use ruma::UInt;
 use uuid::Uuid;
-use ruma::DeviceKeyAlgorithm;
-use ruma::{presence::PresenceState, serde::Raw, api::client::r0::sync::sync_events::*, events::*};
+use ruma::{DeviceKeyAlgorithm, RoomId, UserId, UInt, presence::PresenceState, serde::Raw, api::client::r0::sync::sync_events::*};
 use std::collections::BTreeMap;
 use ureq::{Agent, AgentBuilder, OrAnyStatus};
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
 use std::time::{Instant, Duration};
-//use std::thread;
-//mod instruction_generators;
-//use std::sync::mpsc::{channel, Sender, Receiver, TryRecvError};
-//use std::thread::Duration;
+
+pub mod macros;
+pub mod essentials;
+pub mod plugins;
+mod instruction_generators;
+use instruction_generators::RoomTypeData;
 const BASE: &str = "/_matrix/client/v3/";
 const TIME_TO_IDLE: Duration = Duration::from_secs(3 * 60);
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct StorageData {
     pub auth_token: String,
 }
-/*
-pub enum Presence {
-    Online,
-    Offline,
-    Unavailable,
+
+#[allow(dead_code)]
+pub struct SonicBotEventModule<'a> {
+    pub name: String,
+    pub essential: bool,
+    pub main: Box<dyn Fn(EventArgs<'a>) -> Vec<crate::Instructions>>,
+    help: String,
+}
+#[derive(Debug, Clone)]
+pub struct MessageArgs<'a> {
+    pub message_info: MessageInfo,
+    pub owner: UserId,
+    pub ctrlc_handler: &'a ctrlc_handler::CtrlCHandler,
+    pub cleanup_on_ctrlc: bool,
+    pub prefix: String,
 }
 
-impl std::fmt::Display for Presence {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let output = match self {
-            Presence::Online => "online",
-            Presence::Offline => "offline",
-            Presence::Unavailable => "unavailable",
-        };
-        write!(f, "{}", output)
+impl<'a> MessageArgs<'a> {
+    pub fn new(message_info: MessageInfo, owner: UserId, ctrlc_handler: &'a ctrlc_handler::CtrlCHandler, cleanup_on_ctrlc: bool, prefix: String) -> Self {
+        Self {
+            message_info: message_info,
+            owner: owner,
+            ctrlc_handler: ctrlc_handler,
+            cleanup_on_ctrlc: cleanup_on_ctrlc,
+            prefix: prefix,
+        }
     }
 }
 
 
-struct RoomUserData {
-    name: String,
-    
+#[derive(Debug, Clone)]
+pub struct EventArgs<'a> {
+    pub room_data: crate::instruction_generators::RoomTypeData,
+    pub starting: bool,
+    pub ctrlc_handler: &'a ctrlc_handler::CtrlCHandler,
+    pub cleanup_on_ctrlc: bool,
+    pub owner: UserId,
+    pub prefix: String,
+    pub me: UserId,
 }
 
-struct RoomData {
-    id: String,
-    local_aliases: Vec<String>,
-    global_aliases: Vec<String>,
-    user_data: BTreeMap<String, RoomUserData>,
+impl<'a> EventArgs<'a> {
+    pub fn new(room_data: crate::instruction_generators::RoomTypeData, starting: bool, ctrlc_handler: &'a ctrlc_handler::CtrlCHandler, cleanup_on_ctrlc: bool, owner: UserId, prefix: String, me: UserId) -> Self {
+        Self {
+            room_data: room_data,
+            starting: starting,
+            ctrlc_handler: ctrlc_handler,
+            cleanup_on_ctrlc: cleanup_on_ctrlc,
+            owner: owner,
+            prefix: prefix,
+            me: me,
+        }
+    }
 }
 
-enum MatrixRoomEvent {
-    CannonicalAlias(Value),
-    Create(Value),
-    JoinRules(Value),
-    Member(Value),
-    PowerLevels(Value),
-
+pub struct SonicBotMessageModule<'a> {
+    pub name: String,
+    pub essential: bool,
+    pub main: Box<dyn Fn(MessageArgs<'a>) -> Vec<crate::Instructions>>,
+    pub help: String,
 }
-*/
+
+pub fn generate_module_names(glob_results: glob::Paths) -> Vec<String> {
+    let mut module_names: Vec<String> = Vec::new();
+    for r in glob_results {
+        let file_name: String = r.unwrap().as_path().file_name().unwrap().to_str().unwrap().to_string();
+        let module_name = file_name.split(".").collect::<Vec<&str>>()[0];
+        if module_name != "mod" {
+            module_names.push(module_name.to_string());
+        }
+    }
+    module_names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    module_names
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct EventResponse {
+    /// The batch token to supply in the `since` param of the next `/sync` request.
     pub next_batch: String,
-    pub rooms: Option<Rooms>,
-    pub presence: Option<Presence>,
-    pub account_data: Option<GlobalAccountData>,
-    pub to_device: Option<ToDevice>,
-    pub device_lists: Option<DeviceLists>,
-    pub device_one_time_keys_count: Option<BTreeMap<DeviceKeyAlgorithm, UInt>>,
+
+    /// Updates to rooms.
+    #[serde(default, skip_serializing_if = "Rooms::is_empty")]
+    pub rooms: Rooms,
+
+    /// Updates to the presence status of other users.
+    #[serde(default, skip_serializing_if = "Presence::is_empty")]
+    pub presence: Presence,
+
+    /// The global private data created by this user.
+    #[serde(default, skip_serializing_if = "GlobalAccountData::is_empty")]
+    pub account_data: GlobalAccountData,
+
+    /// Messages sent directly between devices.
+    #[serde(default, skip_serializing_if = "ToDevice::is_empty")]
+    pub to_device: ToDevice,
+
+    /// Information on E2E device updates.
+    ///
+    /// Only present on an incremental sync.
+    #[serde(default, skip_serializing_if = "DeviceLists::is_empty")]
+    pub device_lists: DeviceLists,
+
+    /// For each key algorithm, the number of unclaimed one-time keys
+    /// currently held on the server for a device.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub device_one_time_keys_count: BTreeMap<DeviceKeyAlgorithm, UInt>,
+
+    /// For each key algorithm, the number of unclaimed one-time keys
+    /// currently held on the server for a device.
+    ///
+    /// The presence of this field indicates that the server supports
+    /// fallback keys.
+    #[serde(rename = "org.matrix.msc2732.device_unused_fallback_key_types")]
+    pub device_unused_fallback_key_types: Option<Vec<DeviceKeyAlgorithm>>,
 }
 
 #[derive(Debug)]
 pub struct SonicBot {
     data: StorageData,
     host: String,
-    username: String,
-    server_name: String,
+    me: UserId,
     agent: Agent,
     joined_rooms: Vec<ruma::RoomId>,
     since: Option<String>,
-    //last_event: EventResponse,
     last_response_time: Instant,
     starting: bool,
     ctrlc_handler: ctrlc_handler::CtrlCHandler,
     cleanup_on_ctrlc: bool,
+    prefix: String,
+    owner: UserId,
 }
 #[derive(PartialEq, Eq, Debug, Clone)]
-enum Instructions {
+pub enum Instructions {
     UpdateLastResponseTime(Instant),
     AddRoom(ruma::RoomId),
     Quit(bool),
     DelRoom(ruma::RoomId),
     SetSince(String),
-    RespondToMessage(MessageInfo)
+    SendMessage(RoomId, String)
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-struct MessageInfo {
-    message: String,
-    sender: UserId,
-    room_id: RoomId,
+pub struct MessageInfo {
+    pub message: String,
+    pub words: Vec<String>,
+    pub args: Vec<String>,
+    pub sender: UserId,
+    pub room_id: RoomId,
 }
 impl SonicBot {
-    pub fn new(host: impl Into<String>, username: impl Into<String>, server_name: impl Into<String>, cleanup_on_ctrlc: bool) -> Self {
+    pub fn new(host: impl Into<String>, username: impl Into<String>, server_name: impl Into<String>, cleanup_on_ctrlc: bool, prefix: impl Into<String>, owner: impl Into<String>) -> Self {
         Self {
             data: StorageData::default(),
             host: host.into().trim_end_matches("/").to_string(),
-            username: username.into(),
-            server_name: server_name.into(),
+            me: UserId::try_from(format!("@{}:{}",  username.into(), server_name.into()).as_str()).unwrap(),
             agent: AgentBuilder::new().timeout_read(Duration::from_secs(3)).build(),
             joined_rooms: Vec::new(),
             since: None,
@@ -118,28 +180,20 @@ impl SonicBot {
             starting: true,
             ctrlc_handler: ctrlc_handler::CtrlCHandler::new(),
             cleanup_on_ctrlc: cleanup_on_ctrlc,
+            prefix: prefix.into(),
+            owner: UserId::try_from(owner.into()).unwrap(),
         }
     }
-    /*
-    fn my_middleware(request: Request, next: MiddlewareNext) -> Result<Response, ureq::Error> {
-        let mut req = request.clone();
-        // do middleware things
-        req.timeout_response();
-        // continue the middleware chain
-        next.handle(req)
-    }
-    */
     fn login(&self, password: String) -> String {
         let content = json!({
             "type": "m.login.password",
             "identifier": {
                 "type": "m.id.user",
-                "user": self.username
+                "user": self.me.localpart()
             },
             "password": password
         });
         let val: Value = self.post("login", content, None).unwrap().into_json().unwrap();
-        //let val: Value = self.agent.post(format!("{}{}/login", self.host, BASE).as_str()).send_json(content).unwrap().into_json().unwrap();
         println!("{:?}", val);
         val["access_token"].as_str().unwrap().to_string()
     }
@@ -170,10 +224,6 @@ impl SonicBot {
         }
         r.call().or_any_status()
     }
-    fn get_joined_rooms(&self) -> Vec<String> {
-        let val: Value = self.get("joined_rooms", None).unwrap().into_json().unwrap();
-        val["joined_rooms"].as_array().unwrap().iter().map(|x| x.to_string()).collect()
-    }
     fn join_room_id(&self, room_id: ruma::RoomId) -> Value {
         //let room_string = room_id_or_alias.into();
         //let serv_name = server_name.into();
@@ -196,8 +246,7 @@ impl SonicBot {
         if val.clone().as_object().unwrap().contains_key("error") {
             Err(val)
         } else {
-            //Ok(serde_json::from_str::<Raw<EventResponse>>(val.to_string().as_str()).unwrap().deserialize().unwrap())
-            Ok(serde_json::from_value(val).unwrap())
+            Ok(serde_json::from_str::<Raw<EventResponse>>(val.to_string().as_str()).unwrap().deserialize().unwrap())
         }
     }
     fn calculate_presence(&self) -> PresenceState {
@@ -230,8 +279,8 @@ impl SonicBot {
                 Instructions::SetSince(x) => {
                     self.since = Some(x);
                 },
-                Instructions::RespondToMessage(x) => {
-                    self.respond_to_message(x);
+                Instructions::SendMessage(room_id, message) => {
+                    self.send_message(room_id, message);
                 }
             }
         }
@@ -246,7 +295,6 @@ impl SonicBot {
         for this_room in room_ids {
             let this_room_string = this_room.into();
             let this_room_id_val: Value = self.get(format!("directory/room/{}", urlencoding::encode(this_room_string.as_str()).to_string().as_str()), None).unwrap().into_json().unwrap();
-            println!("{:#?}", this_room_id_val);
             let room_id = ruma::RoomId::try_from(this_room_id_val["room_id"].as_str().unwrap()).unwrap();
             if !self.joined_rooms.contains(&room_id) {
                 self.join_room_id(room_id);
@@ -257,17 +305,7 @@ impl SonicBot {
             processed_instructions = self.process_instructions(instructions);
         }
     }
-    fn respond_to_message(&mut self, message_info: MessageInfo) {
-        let sender = message_info.sender;
-        let message = message_info.message;
-        let room_id = message_info.room_id;
-        if sender != UserId::try_from(format!("@{}:{}", self.username, self.server_name).as_str()).unwrap() {
-            if message.starts_with("!hi") {
-                self.send_message(room_id.to_string(), format!("{}: Hello!", sender.localpart()));
-            }
-        }
-    }
-    fn send_message(&self, room_id: String, message: impl Into<String>) {
+    fn send_message(&self, room_id: RoomId, message: impl Into<String>) {
         let msg = message.into();
         let txid = Uuid::new_v4().to_simple().encode_lower(&mut Uuid::encode_buffer()).to_string();
         self.put(format!("rooms/{}/send/m.room.message/{}", room_id.clone(), txid).as_str(), json!({"body": msg, "msgtype": "m.text"}), None).unwrap();
@@ -276,36 +314,8 @@ impl SonicBot {
         let mut instructions: Vec<Instructions> = Vec::new();
         instructions.push(Instructions::SetSince(event.next_batch));
         //instructions.append()
-        if let Some(rooms) = event.rooms {
-            for (room_id, joined_room) in rooms.join.iter() {
-                if self.ctrlc_handler.should_continue() {
-                    instructions.push(Instructions::AddRoom(room_id.clone()));
-                    if !self.starting {
-                        for message_info in joined_room.timeline.events.iter().filter_map(|m| {
-                            if let ruma::events::AnySyncRoomEvent::Message(message_event) = m.deserialize_as().unwrap() {
-                                if let AnySyncMessageEvent::RoomMessage(room_message) = message_event {
-                                    let sender = room_message.sender;
-                                    if let room::message::MessageType::Text(text_message_event_content) = room_message.content.msgtype {
-                                        return Some(MessageInfo{
-                                            message: text_message_event_content.body,
-                                            sender: sender,
-                                            room_id: room_id.clone(),
-                                        });
-                                    }
-                                }
-                            }
-                            None
-                        }) {
-                            instructions.push(Instructions::UpdateLastResponseTime(Instant::now()));
-                            instructions.push(Instructions::RespondToMessage(message_info));
-                        }
-                    }
-                } else {
-                    instructions.push(Instructions::Quit(self.cleanup_on_ctrlc));
-                    return instructions;
-                }
-            }
-        }
+        //if let Some(rooms) = event.rooms {
+        handle_these_rooms!(self, instructions, RoomTypeData::Joined(event.rooms.join), RoomTypeData::Left(event.rooms.leave), RoomTypeData::Invited(event.rooms.invite));
         instructions
     }
 }
