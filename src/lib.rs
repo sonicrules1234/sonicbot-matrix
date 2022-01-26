@@ -270,7 +270,8 @@ impl SonicBot {
                 },
                 Instructions::AddRoom(x) => {
                     if !self.joined_rooms.contains(&x) {
-                        self.joined_rooms.push(x);
+                        self.joined_rooms.push(x.clone());
+                        self.join_room_id(x);
                     }
                 },
                 Instructions::UpdateLastResponseTime(x) => {

@@ -1,6 +1,6 @@
 [package]
 name = "sonicbot-matrix"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Westly Ward <sonicrules1234@gmail.com>"]
 description = "Matrix bot that you can write plugins for"
