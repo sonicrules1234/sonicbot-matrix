@@ -1,3 +1,7 @@
 /target
 /Cargo.lock
 /config.yaml
+/copyreleases
+/release.sh
+/copyreleases.sh
+/releases
