@@ -5,6 +5,10 @@ use ureq::{Agent, AgentBuilder, OrAnyStatus};
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
 use std::time::{Instant, Duration};
+use linewrapper::LineWrapper;
+use std::sync::mpsc::{channel, Sender, Receiver};
+#[cfg(target_os = "android")]
+use macroquad::prelude::*;
 
 pub mod macros;
 pub mod essentials;
@@ -56,10 +60,11 @@ pub struct EventArgs<'a> {
     pub owner: UserId,
     pub prefix: String,
     pub me: UserId,
+    pub tx: Sender<String>,
 }
 
 impl<'a> EventArgs<'a> {
-    pub fn new(room_data: crate::instruction_generators::RoomTypeData, starting: bool, ctrlc_handler: &'a ctrlc_handler::CtrlCHandler, cleanup_on_ctrlc: bool, owner: UserId, prefix: String, me: UserId) -> Self {
+    pub fn new(room_data: crate::instruction_generators::RoomTypeData, starting: bool, ctrlc_handler: &'a ctrlc_handler::CtrlCHandler, cleanup_on_ctrlc: bool, owner: UserId, prefix: String, me: UserId, tx: Sender<String>) -> Self {
         Self {
             room_data: room_data,
             starting: starting,
@@ -68,6 +73,7 @@ impl<'a> EventArgs<'a> {
             owner: owner,
             prefix: prefix,
             me: me,
+            tx: tx.clone()
         }
     }
 }
@@ -147,6 +153,7 @@ pub struct SonicBot {
     cleanup_on_ctrlc: bool,
     prefix: String,
     owner: UserId,
+    line_wrapper: Option<Sender<String>>,
 }
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Instructions {
@@ -182,6 +189,7 @@ impl SonicBot {
             cleanup_on_ctrlc: cleanup_on_ctrlc,
             prefix: prefix.into(),
             owner: UserId::try_from(owner.into()).unwrap(),
+            line_wrapper: None,
         }
     }
     fn login(&self, password: String) -> String {
@@ -194,7 +202,7 @@ impl SonicBot {
             "password": password
         });
         let val: Value = self.post("login", content, None).unwrap().into_json().unwrap();
-        println!("{:?}", val);
+        self.get_tx().send(format!("{:?}", val)).unwrap();
         val["access_token"].as_str().unwrap().to_string()
     }
     fn post(&self, url_ext: impl Into<String>, content: Value, query_pairs: Option<Vec<(String, String)>>) -> Result<ureq::Response, ureq::Transport> {
@@ -242,7 +250,7 @@ impl SonicBot {
             req = self.get("sync", Some(vec![("full_state".to_string(), "true".to_string()), ("set_presence".to_string(), format!("{}", presence)), ("timeout".to_string(), "3000".to_string())])).unwrap();
         }
         let val: Value = req.into_json().unwrap();
-        println!("{}", val.to_string());
+        //self.get_tx().send(format!("{}", val.to_string())).unwrap();
         if val.clone().as_object().unwrap().contains_key("error") {
             Err(val)
         } else {
@@ -287,7 +295,11 @@ impl SonicBot {
         }
         None
     }
+    #[cfg(not(target_os = "android"))]
     pub fn start(&mut self, password: impl Into<String>, room_ids: Vec<impl Into<String>>) {
+        let (tx, rx) = channel::<String>();
+        self.line_wrapper = Some(tx.clone());
+        let mut line_wrapper = LineWrapper::new();
         let pass = password.into();
         self.data.auth_token = self.login(pass);
         let mut instructions: Vec<Instructions> = self.generate_instructions(self.sync().unwrap());
@@ -304,6 +316,65 @@ impl SonicBot {
         while processed_instructions.is_none() && self.ctrlc_handler.should_continue() {
             instructions = self.generate_instructions(self.sync().unwrap());
             processed_instructions = self.process_instructions(instructions);
+            Self::check_line_wrapper(&rx, &mut line_wrapper);
+        }
+    }
+    fn get_tx(&self) -> Sender<String> {
+        self.line_wrapper.clone().unwrap()
+    }
+    //#[cfg(target_os = "android")]
+    //async fn generate_and_process_instructions(&mut self) {
+    //    self.process_instructions(self.generate_instructions(self.sync().unwrap()));
+    //}
+    #[cfg(target_os = "android")]
+    fn respond(&mut self, room_ids: Vec<impl Into<String>>) {
+        //self.generate_and_process_instructions().await;
+        //info!("[sonicbot-matrix] in _future");
+        self.get_tx().send("test".to_string()).unwrap();
+        self.process_instructions(self.generate_instructions(self.sync().unwrap()));
+        //info!("[sonicbot-matrix] got past first instructions");
+        self.starting = false;
+        for this_room in room_ids {
+            let this_room_string = this_room.into();
+            let this_room_id_val: Value = self.get(format!("directory/room/{}", urlencoding::encode(this_room_string.as_str()).to_string().as_str()), None).unwrap().into_json().unwrap();
+            let room_id = ruma::RoomId::try_from(this_room_id_val["room_id"].as_str().unwrap()).unwrap();
+            if !self.joined_rooms.contains(&room_id) {
+                self.join_room_id(room_id);
+            }
+        }
+        loop {
+            self.process_instructions(self.generate_instructions(self.sync().unwrap()));
+        }
+    } 
+    #[cfg(target_os = "android")]
+    pub async fn start(mut self, password: impl Into<String>, room_ids: Vec<String>) {
+        let (tx, rx) = channel::<String>();
+        self.line_wrapper = Some(tx.clone());
+        let mut line_wrapper = LineWrapper::new();
+        let pass = password.into();
+        self.data.auth_token = self.login(pass);
+        std::thread::spawn(move || {
+            self.respond(room_ids); 
+        });
+        //info!("[sonicbot-matrix] got past _future");
+        //self.generate_and_process_instructions().await;
+        //self.starting = false;
+        
+        loop {
+            //instructions = self.generate_instructions();
+            //processed_instructions = self.process_instructions(instructions);
+            //info!("[sonicbot-matrix] checking line_wrapper");
+            Self::check_line_wrapper(&rx, &mut line_wrapper);
+            //info!("[sonicbot-matrix] checked line_wrapper");
+            line_wrapper.show_lines();
+            //info!("[sonicbot-matrix] got past show_lines");
+            next_frame().await;
+        }
+    }
+    #[allow(unused_variables)]
+    fn check_line_wrapper(rx: &Receiver<String>, line_wrapper: &mut LineWrapper) {
+        if let Ok(message) = rx.try_recv() {
+            linewrapper::lw_println!(line_wrapper, "{}", message);
         }
     }
     fn send_message(&self, room_id: RoomId, message: impl Into<String>) {

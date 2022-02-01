@@ -23,7 +23,7 @@ pub fn main<'a>(event_args: EventArgs<'a>) -> Vec<Instructions> {
                                 }
                                 if let room::message::MessageType::Text(text_message_event_content) = room_message.content.msgtype {
                                     let message = text_message_event_content.body;
-                                    println!("Got '{}' from '{}'", message, sender);
+                                    event_args.tx.send(format!("Got '{}' from '{}'", message, sender)).unwrap();
                                     if message.starts_with(&event_args.prefix) {
                                         let words: Vec<String> = message.split_whitespace().map(|w| w.to_string()).collect();
                                         let args = words[1..].to_vec();
