@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::path::{PathBuf};
 use std::io::Write;
+use linewrapper::LineWrapper;
 #[cfg(target_os = "android")]
 use macroquad::prelude::*;
 
@@ -18,7 +19,7 @@ struct SonicbotConfig {
 #[cfg(target_os = "android")]
 #[macroquad::main("sonicbot_matrix")]
 async fn main() {
-    if !handle_config() {
+    if !handle_config().await {
         info!("[sonicbot-matrix] handle_config is false");
         let mut line_wrapper = linewrapper::LineWrapper::new();
         //info!("[sonicbot-matrix] Past line_wrapper creation");
@@ -39,27 +40,75 @@ async fn main() {
 
 #[cfg(target_os = "android")]
 fn get_config_path() -> PathBuf {
-    PathBuf::from("/storage/emulated/0/Android/media/rust.sonicbot_matrix")
+    PathBuf::from("/storage/emulated/0/sonicbot-matrix")
 }
 
 #[cfg(not(target_os = "android"))]
 fn get_config_path() -> PathBuf {
     PathBuf::from("./")
 }
+
+
+
+#[cfg(not(target_os = "android"))]
 fn handle_config() -> bool {
     let dist_config = include_str!("../config.yaml.dist");
     if !get_config_path().exists() {
-        std::fs::create_dir(get_config_path()).unwrap();
+        if let Err(e) = std::fs::create_dir(get_config_path()) {
+            let mut _line_wrapper = LineWrapper::new();
+            linewrapper::lw_println!(_line_wrapper, "ERROR: {:?}\nPlease give this app full permissions to access files on external storage.", e);
+            //conditional_event_loop(_line_wrapper);
+        }
     }
     if !get_config_path().join("config.yaml").exists() {
         let mut f = std::fs::File::create(get_config_path().join("config.yaml")).unwrap();
         f.write_all(dist_config.as_bytes()).unwrap();
         return false;
     }
-    true
-    
+    true    
 }
 
+
+#[cfg(target_os = "android")]
+async fn handle_config() -> bool {
+    let dist_config = include_str!("../config.yaml.dist");
+    if !get_config_path().exists() {
+        info!("[sonicbot-matrix] path doesn't exist");
+        if let Err(e) = std::fs::create_dir(get_config_path()) {
+            //info!("[sonicbot-matrix] before creating lw");
+            let mut line_wrapper = LineWrapper::new();
+            //info!("[sonicbot-matrix] after creating lw");
+            linewrapper::lw_println!(line_wrapper, "ERROR: {:?}\nPlease give this app full permissions to access files on external storage.", e);
+            //conditional_event_loop(_line_wrapper);
+            //info!("[sonicbot-matrix] outputted error");
+            loop {
+                line_wrapper.show_lines();
+                next_frame().await;
+            }
+        }
+    }
+    if !get_config_path().join("config.yaml").exists() {
+        let mut f = std::fs::File::create(get_config_path().join("config.yaml")).unwrap();
+        f.write_all(dist_config.as_bytes()).unwrap();
+        return false;
+    }
+    true    
+}
+
+/*
+#[cfg(target_os = "android")]
+async fn conditional_event_loop(line_wrapper: LineWrapper) {
+    loop {
+        line_wrapper.show_lines();
+        next_frame().await        
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn conditional_event_loop(_line_wrapper: LineWrapper) {
+    ()
+}
+*/
 #[cfg(not(target_os = "android"))]
 fn main() {
     if !handle_config() {

@@ -1,5 +1,5 @@
 use uuid::Uuid;
-use ruma::{DeviceKeyAlgorithm, RoomId, UserId, UInt, presence::PresenceState, serde::Raw, api::client::r0::sync::sync_events::*};
+use ruma::{DeviceKeyAlgorithm, RoomId, UserId, UInt, RoomAliasId,  presence::PresenceState, serde::Raw, api::client::r0::sync::sync_events::*};
 use std::collections::BTreeMap;
 use ureq::{Agent, AgentBuilder, OrAnyStatus};
 use serde::{Serialize, Deserialize};
@@ -15,11 +15,12 @@ pub mod essentials;
 pub mod plugins;
 mod instruction_generators;
 use instruction_generators::RoomTypeData;
-const BASE: &str = "/_matrix/client/v3/";
+const BASE: &str = "/_matrix/client/r0/";
 const TIME_TO_IDLE: Duration = Duration::from_secs(3 * 60);
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct StorageData {
     pub auth_token: String,
+    pub room_to_aliases: BTreeMap<RoomId, Vec<RoomAliasId>>,
 }
 
 #[allow(dead_code)]
@@ -61,10 +62,11 @@ pub struct EventArgs<'a> {
     pub prefix: String,
     pub me: UserId,
     pub tx: Sender<String>,
+    pub room_to_aliases: BTreeMap<RoomId, Vec<RoomAliasId>>,
 }
 
 impl<'a> EventArgs<'a> {
-    pub fn new(room_data: crate::instruction_generators::RoomTypeData, starting: bool, ctrlc_handler: &'a ctrlc_handler::CtrlCHandler, cleanup_on_ctrlc: bool, owner: UserId, prefix: String, me: UserId, tx: Sender<String>) -> Self {
+    pub fn new(room_data: crate::instruction_generators::RoomTypeData, starting: bool, ctrlc_handler: &'a ctrlc_handler::CtrlCHandler, cleanup_on_ctrlc: bool, owner: UserId, prefix: String, me: UserId, tx: Sender<String>, room_to_aliases: BTreeMap<RoomId, Vec<RoomAliasId>>) -> Self {
         Self {
             room_data: room_data,
             starting: starting,
@@ -73,7 +75,8 @@ impl<'a> EventArgs<'a> {
             owner: owner,
             prefix: prefix,
             me: me,
-            tx: tx.clone()
+            tx: tx.clone(),
+            room_to_aliases: room_to_aliases,
         }
     }
 }
@@ -162,7 +165,8 @@ pub enum Instructions {
     Quit(bool),
     DelRoom(ruma::RoomId),
     SetSince(String),
-    SendMessage(RoomId, String)
+    SendMessage(RoomId, String),
+    SaveRoomAlias(RoomId, RoomAliasId)
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -172,6 +176,7 @@ pub struct MessageInfo {
     pub args: Vec<String>,
     pub sender: UserId,
     pub room_id: RoomId,
+    pub room_aliases: Vec<RoomAliasId>
 }
 impl SonicBot {
     pub fn new(host: impl Into<String>, username: impl Into<String>, server_name: impl Into<String>, cleanup_on_ctrlc: bool, prefix: impl Into<String>, owner: impl Into<String>) -> Self {
@@ -230,7 +235,11 @@ impl SonicBot {
                 r = r.query(pair.0.as_str(), pair.1.as_str());
             }
         }
-        r.call().or_any_status()
+        let mut resp = r.clone().call().or_any_status();
+        while let Err(_e) = resp {
+            resp = r.clone().call().or_any_status();
+        }
+        resp
     }
     fn join_room_id(&self, room_id: ruma::RoomId) -> Value {
         //let room_string = room_id_or_alias.into();
@@ -250,7 +259,8 @@ impl SonicBot {
             req = self.get("sync", Some(vec![("full_state".to_string(), "true".to_string()), ("set_presence".to_string(), format!("{}", presence)), ("timeout".to_string(), "3000".to_string())])).unwrap();
         }
         let val: Value = req.into_json().unwrap();
-        //self.get_tx().send(format!("{}", val.to_string())).unwrap();
+        //self.get_tx().send(format!("{:#?}", val.to_string())).unwrap();
+        //sm_println!(self, "{:#?}", val);
         if val.clone().as_object().unwrap().contains_key("error") {
             Err(val)
         } else {
@@ -290,6 +300,17 @@ impl SonicBot {
                 },
                 Instructions::SendMessage(room_id, message) => {
                     self.send_message(room_id, message);
+                },
+                Instructions::SaveRoomAlias(room_id, alias) => {
+                    if !self.data.room_to_aliases.contains_key(&room_id) {
+                        self.data.room_to_aliases.insert(room_id.clone(), Vec::new()).unwrap();
+                    }
+                    if !self.data.room_to_aliases[&room_id].contains(&alias) {
+                        let mut aliases = self.data.room_to_aliases[&room_id].clone();
+                        aliases.push(alias);
+                        self.data.room_to_aliases.insert(room_id.clone(), aliases);
+                    }
+                    sm_println!(self, "{:#?}", self.data.room_to_aliases[&room_id]);
                 }
             }
         }
@@ -330,7 +351,7 @@ impl SonicBot {
     fn respond(&mut self, room_ids: Vec<impl Into<String>>) {
         //self.generate_and_process_instructions().await;
         //info!("[sonicbot-matrix] in _future");
-        self.get_tx().send("test".to_string()).unwrap();
+        //self.get_tx().send("test".to_string()).unwrap();
         self.process_instructions(self.generate_instructions(self.sync().unwrap()));
         //info!("[sonicbot-matrix] got past first instructions");
         self.starting = false;

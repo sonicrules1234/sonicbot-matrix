@@ -1,5 +1,5 @@
 //use ruma::api::client::r0::sync::sync_events::*;
-use crate::{Instructions, MessageInfo, Instant, instruction_generators::RoomTypeData, EventArgs, MessageArgs};
+use crate::{RoomAliasId, Instructions, MessageInfo, Instant, instruction_generators::RoomTypeData, EventArgs, MessageArgs};
 use ruma::events::*;
 //use std::collections::BTreeMap;
 
@@ -13,6 +13,14 @@ pub fn main<'a>(event_args: EventArgs<'a>) -> Vec<Instructions> {
         for (room_id, joined_room) in x.iter() {
             if event_args.ctrlc_handler.should_continue() {
                 instructions.push(Instructions::AddRoom(room_id.clone()));
+                for event in joined_room.state.events.clone() {
+                    if let ruma::events::AnySyncStateEvent::RoomAliases(room_aliases_event) = event.deserialize().unwrap() {
+                        let aliases = room_aliases_event.content.aliases;
+                        for alias in aliases {
+                            instructions.push(Instructions::SaveRoomAlias(room_id.clone(), alias));
+                        }
+                    } //else if let ruma::events::AnySyncStateEvent::RoomCanonicalAlias
+                }
                 if !event_args.starting {
                     for message_info in joined_room.timeline.events.iter().filter_map(|m| {
                         if let ruma::events::AnySyncRoomEvent::Message(message_event) = m.deserialize_as().unwrap() {
@@ -27,12 +35,17 @@ pub fn main<'a>(event_args: EventArgs<'a>) -> Vec<Instructions> {
                                     if message.starts_with(&event_args.prefix) {
                                         let words: Vec<String> = message.split_whitespace().map(|w| w.to_string()).collect();
                                         let args = words[1..].to_vec();
+                                        let mut room_aliases: Vec<RoomAliasId> = Vec::new();
+                                        if event_args.room_to_aliases.contains_key(&room_id) {
+                                            room_aliases.append(&mut event_args.room_to_aliases[&room_id].clone());
+                                        }
                                         return Some(MessageInfo{
                                             message: message.clone(),
                                             words: words,
                                             args: args,
                                             sender: sender,
                                             room_id: room_id.clone(),
+                                            room_aliases: room_aliases,
                                         });
                                     }
                                 }

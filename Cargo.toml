@@ -1,6 +1,6 @@
 [package]
 name = "sonicbot-matrix"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Westly Ward <sonicrules1234@gmail.com>"]
 description = "Matrix bot that you can write plugins for"
@@ -35,6 +35,8 @@ macroquad = "0.3.13"
 [[package.metadata.android.permission]]
 name = "android.permission.INTERNET"
 
+[[package.metadata.android.permission]]
+name = "android.permission.MANAGE_EXTERNAL_STORAGE"
 
 [[package.metadata.android.permission]]
 name = "android.permission.WRITE_EXTERNAL_STORAGE"
